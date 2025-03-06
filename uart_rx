@@ -1,0 +1,141 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity uart_rx is
+    generic(
+        g_count_clk : integer := 24_000_000/115200;);
+    port(
+        clk : in  STD_LOGIC;
+        rst : in  STD_LOGIC;
+        rx : in  STD_LOGIC;
+        parity_en : in  std_logic := '1';  -- Enable parity
+parity_type in  std_logic := '0';- '0' for even, '1' for odd
+        rx_data_out : out  STD_LOGIC_VECTOR(7 downto 0);
+        parity_error : out std_logic;
+        valid : out STD_logic
+    );
+end uart_rx;
+
+architecture Behavioral of uart_rx is
+    type state_type is (idle, UART_START, UART_get_DATA, UART_PARITY, UART_STOP, clean_up);
+    signal r_state : state_type := idle;
+   
+    signal count : integer range 0 to g_count_clk-1 := 0;
+    signal rx_data_buff : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
+    signal r_index : integer range 0 to 7 := 0;
+   
+    signal rx_parity_bit : std_logic := '0';
+    signal calculated_parity : std_logic := '0;
+   
+    -- Constants for timing
+    constant c_half_bit : integer := g_count_clk/2;
+    constant c_bit_time : integer := g_count_clk-1;
+   
+begin
+    process(clk, rst)
+    begin
+        if rising_edge(clk) then
+            if rst = '1' then
+                -- Reset all signals
+                r_state <= idle;
+                count <= 0;
+                rx_data_buff <= (others => '0');
+                r_index <= 0;
+                valid <= '0';
+                parity_error <= '0';
+            else
+                case r_state is
+                    when idle =>
+                        if rx = '0' then
+                            r_state <= UART_START;
+                        end if;
+                       
+                    when UART_START =>
+                        if count < c_half_bit then
+                            count <= count + 1;
+                        else
+                            count <= 0;
+                            if rx = '0' then
+                                r_state <= UART_get_DATA;
+                            else
+                                r_state <= idle;
+                            end if;
+                        end if;
+                       
+                    when UART_get_DATA =>
+                        if count < c_bit_time then
+                            count <= count + 1;
+                        else
+                            count <= 0;
+                            rx_data_buff(r_index) <= rx;
+                            if r_index < 7 then
+                                r_index <= r_index + 1;
+                                r_state <= UART_get_DATA;
+                            else
+                                r_index <= 0;
+                                if parity_en = '1' then
+                                    r_state <= UART_PARITY;
+                                else
+                                    r_state <= UART_STOP;
+                                end if;
+                            end if;
+                        end if;
+                       
+                    when UART_PARITY =>
+                        if count < c_bit_time then
+                            count <= count + 1;
+                        else
+                            count <= 0;
+                            rx_parity_bit <= rx;
+                            r_state <= UART_STOP;
+                        end if;
+                       
+                    when UART_STOP =>
+                        if count <= c_half_bit then
+                            count <= count + 1;
+                        else
+                            count <= 0;
+                            valid <= '1';
+                            r_state <= clean_up;
+                        end if;
+                       
+                    when clean_up =>
+                        r_state <= idle;
+                        valid <= '0';
+                       
+                        if parity_en = '1' then
+                            if rx_parity_bit = calculated_parity then
+                                parity_error <= '0';
+                            else
+                                parity_error <= '1';
+                            end if;
+                        else
+                            parity_error <= '0';
+                        end if;
+                       
+                end case;
+            end if;
+        end if;
+    end process;
+   
+    -- Separate process for parity calculation
+    process(rx_data_buff, parity_en, g_parity_type)
+    begin
+        if parity_en = '1' then
+            calculated_parity <= '0';
+            for i in 0 to 7 loop
+                calculated_parity <= calculated_parity xor rx_data_buff(i);
+            end loop;
+           
+            if parity_type = '0' then -- Even parity
+  calculated_parity <=  calculated_parity;
+   else -- Odd parity
+calculated_parity <=  calculated_parity;
+            end if;
+        end if;
+    end process;
+   
+    -- Output assignment
+    rx_data_out <= rx_data_buff;
+end Behavioral;
